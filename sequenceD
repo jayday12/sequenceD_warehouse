@@ -1,0 +1,131 @@
+@startuml
+
+box "내부 시스템" #LightBlue
+    actor "관리자" as manager
+    actor "작업자" as worker
+
+    participant "바코드리더기" as barcode
+    participant "Go-stock Client" as Client #LightGreen	
+    participant "SKU DB" as DB
+    participant "모니터링 Server" as server 
+end box
+
+box "외부 시스템" #LightGray
+    participant "Ecount" as ERP
+    participant "사방넷" as sabang
+end box
+
+box "쇼핑몰" #LightPink
+    participant "자사몰" as wisa
+    participant "오픈마켓" as market
+end box
+
+hide footbox
+title Footer removed
+
+
+
+== 기본흐름 ==
+||||
+manager -> worker: 출고 주문서 전달
+worker -> barcode: 바코드 리딩
+activate barcode
+barcode -> Client : client가 주문서 정보를 Queuing
+deactivate barcode
+
+activate Client
+Client -> DB: 출고 DB를 SKU_#을 기준으로 리스팅
+    activate DB
+    DB->DB : *[while 남은 SKU 갯수 == 0] : 넘어온 SKU_#에 해당되는 데이터 불러오기
+        activate DB
+        DB->server : [IF 모든 SKU 맵핑] : SKU DB의 데이터 서버로 전송
+        deactivate DB
+            activate server
+            server -> server : *[while 남은 SKU 갯수 == 0] : SKU_# 기준으로 DB와 맵핑
+            server -> Client : 맵핑된 DB은 클라이언트에 전송
+            deactivate server
+        
+    deactivate DB
+Client -> worker : 화면에 출고 예정 DB 출력
+deactivate Client
+||||
+
+
+== 대체흐름 : 재귀적 출고 처리  ==
+||||
+alt 사용자 출고 과정 (100% 정상일때)
+    server -> Client : 맵핑된 출고 DB 전송
+    activate Client
+    Client -> worker : 화면에 출고 예정 DB 출력
+        
+        activate worker
+        worker ->Client : 1...N 개중 1번째 출고
+        activate Client
+        Client -> Client : *[while 출고 SKU 갯수 == N] : 출고 처리
+        activate Client
+        Client -> worker : K번째 SKU 출고 완료
+        deactivate Client
+        deactivate worker
+        deactivate Client 
+    Client -> server : [IF 모든 SKU 출고 갯수(M) == 모든 SKU 출고 갯수(N) ] : 모니터링 서버로 전달
+    Client ->worker : 출고 완료 메세지
+    deactivate Client
+
+else 사용자 출고 과정 (로케이션 비정상 일때)
+    server -> Client : 맵핑된 출고 DB 전송
+    activate Client
+    Client -> worker : 화면에 출고 예정 DB 출력
+        activate worker
+        worker ->worker : 재귀적 출고
+        worker ->Client : 1...N 개중 1~k-1번쨰 출고 
+        deactivate worker
+     
+    Client ->worker : k-1까지 출고 완료
+        activate worker 
+        worker -> Client : [IF SKU 로케이션에 문제 발생] : 메모처리
+        deactivate worker
+    Client -> server : [IF 일반 출고 SKU 갯수(M) + 메모 출고 SKU 갯수(K) == 모든 SKU 출고 갯수(N) ] :  모니터링 서버로 전달
+    Client ->worker : 출고 완료 메세지 (메모 포함)
+    deactivate Client 
+        
+    
+
+end
+||||
+
+
+== 출고 후 외부 API 연동  ==
+||||
+wisa -> sabang : 자사몰 판매 데이터 전송
+activate sabang
+market -> sabang : 오픈마켓 판매 데이터 전송
+deactivate sabang
+
+sabang->ERP : 판매 데이터 연동
+activate ERP
+
+activate DB
+ERP ->DB : SKU DB 및 재고 DB 연동 API
+DB -> server : ERP와 연동된 출고 SKU DB 전송
+deactivate DB
+
+activate server
+server -> Client : SKU#와 맵핑된 DB 제공
+Client -> worker : 출고 지시
+worker -> Client : 출고 완료 
+Client -> server : 출고 진행 후 DB 전송
+deactivate server
+
+server -> ERP : 출고 완료 DB 연동 후 재고 차감
+manager ->ERP : 재고 및 매출 확인
+
+deactivate ERP
+
+ERP -> sabang : 출고 DB 업데이트
+activate sabang
+sabang -> wisa :  자사몰 재고 DB 업데이트
+sabang -> market : 자사몰 재고 DB 업데이트
+deactivate sabang
+||||
+
+@enduml
